@@ -185,7 +185,9 @@ different element than in the recording) it stops and writes
 
 With `view_port` set, open `http://127.0.0.1:<port>/`. "Take over" refuses
 agent calls with `human_control` and sends your clicks, wheel and keys to the
-page; "Release" gives control back. It listens on 127.0.0.1 only and checks
+page; "Release" gives control back. Refs from before the takeover are refused
+with `stale` until the agent calls `tree` again without `find` or `within`.
+It listens on 127.0.0.1 only and checks
 the Host and Origin headers; any local process can still reach it. Write
 blocking stays on during a takeover, so a save you click is blocked too unless
 the config allows it.

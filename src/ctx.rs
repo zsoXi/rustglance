@@ -80,6 +80,10 @@ pub struct Ctx {
     permit_seq: AtomicU64,
     /// Set by the live view while a human drives the browser.
     pub human: AtomicBool,
+    /// How many times a human has taken over.
+    pub takeovers: AtomicU64,
+    /// `takeovers` as of the last full tree; refs are refused while it lags.
+    pub tree_takeovers: AtomicU64,
     /// Set while the live view streams; a replacement tab restarts the stream.
     pub screencast: AtomicBool,
     child: tokio::sync::Mutex<Option<Child>>,
@@ -186,6 +190,8 @@ impl Ctx {
             permits: Mutex::default(),
             permit_seq: AtomicU64::new(0),
             human: AtomicBool::new(false),
+            takeovers: AtomicU64::new(0),
+            tree_takeovers: AtomicU64::new(0),
             screencast: AtomicBool::new(false),
             child: tokio::sync::Mutex::new(launched.child),
         });

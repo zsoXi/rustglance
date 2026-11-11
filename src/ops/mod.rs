@@ -35,7 +35,8 @@ does not imply navigation did not happen.",
             name: "tree",
             description: "Outline of the page: interactive elements with refs like e12 (role, name, state, \
 value, link target), headings, text, and groups (dialog, nav, aside, main, form, list, table). Refs stay \
-valid until the page reloads. find keeps only lines containing that text; within (a ref) shows one element.",
+valid until the page reloads or a human takes over. find keeps only lines containing that text; within \
+(a ref) shows one element.",
             schema: || {
                 schema(
                     json!({

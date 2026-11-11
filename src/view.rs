@@ -2,7 +2,8 @@
 //!
 //! "Take over" makes every agent call refuse with `human_control` and sends
 //! the viewer's clicks, wheel and keys to the page. "Release" hands control
-//! back. Only requests addressed to 127.0.0.1 or localhost on this port are
+//! back; refs from before the takeover are refused until the next full tree.
+//! Only requests addressed to 127.0.0.1 or localhost on this port are
 //! served, so a web page cannot reach the view through DNS rebinding.
 
 use std::io;
@@ -222,6 +223,8 @@ async fn serve(mut s: TcpStream, ctx: &Ctx, rx: watch::Receiver<Frame>, port: u1
         }
         ("POST", "/take") => {
             ctx.human.store(true, Ordering::Release);
+            // After `human`: a call that sees the new count also sees the takeover.
+            ctx.takeovers.fetch_add(1, Ordering::Release);
             eprintln!("rustglance: a human took over the browser");
             respond(&mut s, "204 No Content", "text/plain", b"").await
         }

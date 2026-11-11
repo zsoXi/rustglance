@@ -18,8 +18,8 @@ use crate::util::now;
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS: &str = "Browser tools. Start with tree: it lists interactive elements with refs \
-(e12), headings and text. Refs stay valid until the page reloads. Every action waits for the page \
-to settle. A refused call returns error, reason and next: do what next says. Writes to the site \
+(e12), headings and text. Refs stay valid until the page reloads or a human takes over. Every action \
+waits for the page to settle. A refused call returns error, reason and next: do what next says. Writes to the site \
 (non-GET requests) from the driven tab are blocked unless the operator allowed them; a blocked \
 write shows up in blocked_writes. Use get to read site data as JSON.";
 
@@ -62,15 +62,32 @@ impl From<Value> for Output {
 pub async fn run_op(ctx: &Ctx, journal: Option<&Journal>, op: &OpDef, mut args: Value) -> Result<Output, Refusal> {
     let t = now();
     let start = Instant::now();
+    // Read before `human`: a takeover raises the count after setting `human`.
+    let takeovers = ctx.takeovers.load(Ordering::Acquire);
+    let old_ref = if takeovers == ctx.tree_takeovers.load(Ordering::Acquire) {
+        None
+    } else {
+        args.get("ref").or_else(|| args.get("within")).and_then(Value::as_str)
+    };
     let res = if ctx.human.load(Ordering::Acquire) {
         Err(Refusal::new(
             Class::HumanControl,
             "a human has taken over the browser in the live view",
             "wait, then repeat the call",
         ))
+    } else if let Some(r) = old_ref {
+        Err(Refusal::new(
+            Class::Stale,
+            format!("ref {r} is from before a human took over"),
+            "call tree without find or within, then use a fresh ref",
+        ))
     } else {
         (op.run)(ctx, args.clone()).await
     };
+    // A filtered tree does not show every fresh ref.
+    if op.name == "tree" && res.is_ok() && args.get("find").is_none() {
+        ctx.tree_takeovers.store(takeovers, Ordering::Release);
+    }
     let res = match res {
         Err(r) if r.class == Class::Wedged => Err(match ctx.recover().await {
             Ok((url, true)) => Refusal::new(
