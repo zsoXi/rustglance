@@ -32,6 +32,27 @@ passwords.
 
 Refs belong to one page state. After the page changes, call `tree` again.
 
+For a native select, use `type` with the observed option label or value;
+do not assume an ArrowDown changed the selection. Disabled controls/options,
+disabled option groups, read-only controls and inert controls are refused.
+For a custom dropdown, tap it, inspect fresh tree, then tap the observed option.
+
+### Waiting for useful content
+
+`tree` is immediate, not a readiness wait. On busy pages, use optional
+`wait_for` on `open` or `tap`: e.g. a destination `url` plus observed CSS
+`selector`, `min_count`, and `min_text_length`, or destination-specific `text`.
+RG requires stable matched content for 200 ms; unrelated network activity
+does not hold this mode back. Default network/DOM quiet behavior is unchanged
+when `wait_for` is omitted. Never choose a generic condition already true
+before a click as proof the action worked. Do not guess selectors on unknown
+pages; observe them or use a specific visible text condition.
+
+Condition mode returns `settled:null`, `readiness.ready:true`, and
+`network_idle_checked:false`. Timeout is a refusal, not evidence the action
+did not happen. Inspect state before repeating. Invalid selectors are refused
+before performing the action. Conditions do not prove login or business success.
+
 ## Reading data
 
 `get` reads the app's API with the browser's session:

@@ -19,10 +19,12 @@ pub fn core() -> Vec<OpDef> {
         OpDef {
             name: "open",
             description: "Go to a URL and wait until the page settles. url is absolute, or a path like /tasks \
-resolved against the current page (else the configured start_url). Returns the final url and title.",
+resolved against the current page (else the configured start_url). Optional wait_for waits for task-specific \
+visible content stable for 200ms instead of network quiet. Returns final url/title and readiness; timeout \
+does not imply navigation did not happen.",
             schema: || {
                 schema(
-                    json!({ "url": { "type": "string", "description": "https://... or /path" } }),
+                    json!({ "url": { "type": "string", "description": "https://... or /path" }, "wait_for": crate::ready::schema() }),
                     &["url"],
                 )
             },
@@ -50,12 +52,15 @@ valid until the page reloads. find keeps only lines containing that text; within
             name: "tap",
             description: "Click an element by ref (from tree) or by its visible text (button or link label). \
 Scrolls it into view, refuses when another element covers it (and names that element), clicks like a \
-mouse, then waits for the page to settle.",
+mouse, then waits for the page to settle. Optional wait_for waits for destination-specific content \
+instead of global network quiet; choose a condition not already true before clicking. A timeout \
+does not imply the click did not happen: inspect before repeating.",
             schema: || {
                 schema(
                     json!({
                         "ref": { "type": "string", "description": "e.g. e12, from tree" },
-                        "text": { "type": "string", "description": "visible label, when there is no ref" }
+                        "text": { "type": "string", "description": "visible label, when there is no ref" },
+                        "wait_for": crate::ready::schema()
                     }),
                     &[],
                 )

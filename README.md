@@ -101,6 +101,40 @@ Every tab rustglance attaches to is brought to front and sees `prefers-reduced-m
 
 ## Tools
 
+### Task-specific readiness (optional)
+
+`open` and `tap` accept `wait_for`. Without it, the existing network/DOM
+quiet wait is unchanged. With it, RG waits for useful content instead of
+unrelated background traffic, and requires the matched text/count to remain
+stable for 200 ms. A text-only condition must remain true for 200 ms; it does not assert stability of surrounding content. Write blocking and refusals are unchanged.
+
+```json
+{"url":"https://example.org/results","wait_for":{"selector":"main article h2","min_count":3,"min_text_length":60,"url":"/results","timeout_ms":8000}}
+```
+
+The condition needs nonempty `text` or a CSS `selector`; optional `url`
+is a substring check. All supplied conditions must hold. `min_count` defaults
+to 1, `min_text_length` to 0 and `timeout_ms` to 8000 (maximum 120000).
+Counts and text length apply to visible matched nodes in the main document.
+Selectors do not execute agent JavaScript. Invalid CSS is refused before
+the navigation/click. A missing or unstable condition returns `timeout`;
+the action may already have happened, so inspect before repeating it.
+
+In condition mode, `settled` is null and `readiness.ready` reports success;
+`network_idle_checked:false` explicitly means global quiet was not checked.
+`timeout_ms` bounds the condition wait after the action, not total navigation
+or click time. A short condition timeout does not trigger tab recovery.
+Choose a condition specific to the destination/result, especially for `tap`:
+generic text already present before a click cannot prove a transition.
+Conditions are readiness evidence, not proof of authentication or a saved
+business transaction. Main-document CSS does not cover iframe contents.
+`tree` itself remains an immediate observation and does not wait for readiness.
+
+`logs` now includes `kind:"settle"` entries for the default wait, with
+`network_ms`, `dom_ms`, `total_ms`, `phase`, and `ready` to distinguish delays.
+`kind:"network_quiet"` also reports peak in-flight count and aged-out
+in-flight requests. These counters diagnose waiting, not site correctness.
+
 | tool | what it does |
 |---|---|
 | `open` | go to a URL (or a path resolved against the page) and settle |
@@ -119,6 +153,16 @@ Refusal classes: `bad_args`, `not_found`, `stale`, `covered`, `logged_out`,
 `browser`, `human_control`, `io`.
 
 ## Journal, scripts, replay
+
+`type` refuses disabled/read-only/inert controls and disabled native select
+options (including disabled optgroups). It does not force a value past these
+UI restrictions. Native selects accept an observed option label/value.
+
+`tree` keeps prose paragraphs/cells with inline links in reading order and
+lists actionable link refs underneath. This avoids moving linked words to
+the end of a sentence; large articles may produce more text. Prefer `find`
+or `within` when only a section is needed. A filtered tree is not a full-page
+completeness guarantee.
 
 Each `mcp` run writes `evidence/journal-<time>.jsonl`, one line per call:
 time, tool, arguments, duration, result or refusal, blocked writes.

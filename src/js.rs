@@ -123,7 +123,8 @@ const group = (el) => {
 };
 const state = (el) => {
   const f = [];
-  if (el.disabled || el.getAttribute('aria-disabled') === 'true') f.push('disabled');
+  if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') f.push('disabled');
+  if (el.readOnly || el.getAttribute('aria-readonly') === 'true') f.push('readonly');
   if (el.checked || el.getAttribute('aria-checked') === 'true') f.push('checked');
   if (el.getAttribute('aria-selected') === 'true' || (el.tagName === 'OPTION' && el.selected)) f.push('selected');
   const ex = el.getAttribute('aria-expanded');
@@ -158,6 +159,19 @@ const walk = (el, depth) => {
     const label = RG.clean(el.getAttribute('aria-label') || '');
     out.push(pad + g + (label ? ' ' + q(label) : ''));
     for (const c of kids(el)) walk(c, depth + 1);
+    return;
+  }
+  // Keep prose in reading order when inline links interrupt its text nodes.
+  // Link refs remain separately actionable instead of moving their words to
+  // the end of the sentence (own-text followed by all children).
+  if (['P','TD','TH','DT','DD','FIGCAPTION'].includes(el.tagName)
+      && nested && !el.querySelector('p,ul,ol,table,div,section,article')) {
+    const t = RG.clean(el.innerText);
+    if (t) out.push(pad + 'text ' + q(t));
+    for (const c of el.querySelectorAll(RG.INTERACTIVE)) {
+      const parent = c.parentElement?.closest(RG.INTERACTIVE);
+      if (!parent || !el.contains(parent)) walk(c, depth + 1);
+    }
     return;
   }
   if (!el.shadowRoot && !el.querySelector(BLOCKERS)) {
@@ -209,11 +223,14 @@ pub const FOCUS: &str = with_rg!(
 const el = a.ref ? RG.get(a.ref) : document.activeElement;
 if (!el) return { stale: true };
 if (el.type === 'password') return { ref: RG.ref(el), password: true };
+if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true' || el.closest('[inert]')) return { ref: RG.ref(el), disabled: true };
+if (el.readOnly || el.getAttribute('aria-readonly') === 'true') return { ref: RG.ref(el), readonly: true };
 el.scrollIntoView({ block: 'center', behavior: 'instant' });
 if (el.tagName === 'SELECT' && a.text != null) {
   const t = RG.clean(a.text).toLowerCase();
   const opt = [...el.options].find((o) => RG.clean(o.text).toLowerCase() === t || o.value === a.text);
   if (!opt) return { ref: RG.ref(el), options: [...el.options].map((o) => o.text) };
+  if (opt.disabled || (opt.parentElement?.tagName === 'OPTGROUP' && opt.parentElement.disabled)) return { ref: RG.ref(el), disabled: true };
   el.value = opt.value;
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));

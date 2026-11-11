@@ -131,8 +131,15 @@ pub async fn resolve(ctx: &Ctx, url: &str) -> Result<String, Refusal> {
 
 pub fn open(ctx: &Ctx, a: Value) -> OpFuture<'_> {
     Box::pin(async move {
-        let a = args(a, &["url"])?;
+        let a = args(a, &["url", "wait_for"])?;
+        let ready = crate::ready::parse(a.get("wait_for"))?;
+        crate::ready::validate_selector(ctx, ready.as_ref()).await?;
         let url = resolve(ctx, req_str(&a, "url")?).await?;
+        let previous = if ready.is_some() {
+            ctx.eval("() => performance.timeOrigin", &json!({})).await?.as_f64()
+        } else {
+            None
+        };
         let start = Instant::now();
         let wait = Duration::from_millis(ctx.cfg.cdp_timeout_ms.saturating_add(ctx.cfg.settle_ms));
         let r = ctx.page_call_with("Page.navigate", json!({ "url": url }), wait).await?;
@@ -143,10 +150,30 @@ pub fn open(ctx: &Ctx, a: Value) -> OpFuture<'_> {
                 "check the URL; the site may be down",
             ));
         }
-        let settled = ctx.settle(start).await?;
+        let readiness = if let Some(ref condition) = ready {
+            Some(
+                crate::ready::wait(
+                    ctx,
+                    condition,
+                    if r.get("loaderId").is_some() { previous } else { None },
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let settled = if ready.is_none() {
+            Some(ctx.settle(start).await?)
+        } else {
+            None
+        };
         let (now, title) = ctx.page_info().await?;
         logged_out(ctx, &now)?;
-        Ok(json!({ "url": now, "title": title, "settled": settled }).into())
+        let mut result = json!({ "url": now, "title": title, "settled": settled });
+        if let Some(readiness) = readiness {
+            result["readiness"] = readiness;
+        }
+        Ok(result.into())
     })
 }
 
@@ -167,14 +194,29 @@ pub fn tree(ctx: &Ctx, a: Value) -> OpFuture<'_> {
 
 pub fn tap(ctx: &Ctx, a: Value) -> OpFuture<'_> {
     Box::pin(async move {
-        let a = args(a, &["ref", "text"])?;
+        let a = args(a, &["ref", "text", "wait_for"])?;
+        let ready = crate::ready::parse(a.get("wait_for"))?;
+        crate::ready::validate_selector(ctx, ready.as_ref()).await?;
         let t = target(&a)?;
         let start = Instant::now();
         let hit = click(ctx, &t).await?;
-        let settled = ctx.settle(start).await?;
+        let readiness = if let Some(ref condition) = ready {
+            Some(crate::ready::wait(ctx, condition, None).await?)
+        } else {
+            None
+        };
+        let settled = if ready.is_none() {
+            Some(ctx.settle(start).await?)
+        } else {
+            None
+        };
         let url = ctx.current_url().await?;
         logged_out(ctx, &url)?;
-        Ok(json!({ "ref": hit.r, "clicked": hit.desc, "url": url, "settled": settled }).into())
+        let mut result = json!({ "ref": hit.r, "clicked": hit.desc, "url": url, "settled": settled });
+        if let Some(readiness) = readiness {
+            result["readiness"] = readiness;
+        }
+        Ok(result.into())
     })
 }
 
@@ -214,6 +256,13 @@ pub fn type_(ctx: &Ctx, a: Value) -> OpFuture<'_> {
                 Class::Password,
                 format!("{label} is a password field"),
                 "stop; a human must log in",
+            ));
+        }
+        if f["disabled"] == true || f["readonly"] == true {
+            return Err(Refusal::new(
+                Class::NotFound,
+                format!("{label} or its selected option is disabled, inert, or read-only"),
+                "choose an enabled editable control from tree; do not force the value",
             ));
         }
         if let Some(options) = f["options"].as_array() {

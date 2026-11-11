@@ -507,13 +507,32 @@ impl Ctx {
     /// `arg` is serialized JSON, so tool arguments reach the page as data,
     /// never as code. No tool runs agent-supplied JavaScript.
     pub async fn eval(&self, func: &str, arg: &Value) -> Result<Value, Refusal> {
+        self.eval_with_timeout(func, arg, Duration::from_millis(self.cfg.cdp_timeout_ms))
+            .await
+    }
+
+    /// Fixed-script evaluation bounded by the caller's remaining deadline.
+    pub(crate) async fn eval_with_timeout(&self, func: &str, arg: &Value, timeout: Duration) -> Result<Value, Refusal> {
         let params = json!({
             "expression": format!("({func})({arg})"),
             "returnByValue": true,
             "awaitPromise": true,
             "userGesture": true,
         });
-        let r = self.page_call("Runtime.evaluate", params).await?;
+        let r = self
+            .page_call_with("Runtime.evaluate", params, timeout)
+            .await
+            .map_err(|e| {
+                if matches!(e, CdpError::Timeout { .. }) && timeout < Duration::from_millis(self.cfg.cdp_timeout_ms) {
+                    Refusal::new(
+                        Class::Timeout,
+                        "the readiness evaluation exceeded its remaining time budget",
+                        "inspect tree/logs before repeating the action",
+                    )
+                } else {
+                    Refusal::from(e)
+                }
+            })?;
         if let Some(ex) = r.get("exceptionDetails") {
             return Err(page_error(ex));
         }
@@ -585,16 +604,29 @@ impl Ctx {
     /// went quiet in time; a busy page is not an error.
     pub async fn settle(&self, since: Instant) -> Result<bool, Refusal> {
         let deadline = since + Duration::from_millis(self.cfg.settle_ms);
+        let mut network_ms = 0u128;
+        let mut dom_ms = 0u128;
         loop {
+            let network_start = Instant::now();
             if !self.network_quiet(deadline).await {
+                network_ms += network_start.elapsed().as_millis();
+                self.log("settle", json!({"ready":false,"phase":"network","network_ms":network_ms,"dom_ms":dom_ms,"total_ms":since.elapsed().as_millis()}));
                 return Ok(false);
             }
+            network_ms += network_start.elapsed().as_millis();
             let left = deadline.saturating_duration_since(Instant::now());
             let max = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
+            let dom_start = Instant::now();
             match self.eval(js::DOM_QUIET, &json!({ "quiet": 200, "max": max })).await {
-                Ok(v) => return Ok(v.as_bool().unwrap_or(false)),
+                Ok(v) => {
+                    dom_ms += dom_start.elapsed().as_millis();
+                    let ready = v.as_bool().unwrap_or(false);
+                    self.log("settle", json!({"ready":ready,"phase":"dom","network_ms":network_ms,"dom_ms":dom_ms,"total_ms":since.elapsed().as_millis()}));
+                    return Ok(ready);
+                }
                 // A navigation destroyed the document mid-wait; wait for the next one.
                 Err(r) if matches!(r.class, Class::PageError | Class::Browser) => {
+                    dom_ms += dom_start.elapsed().as_millis();
                     if Instant::now() >= deadline {
                         return Ok(false);
                     }
@@ -607,18 +639,37 @@ impl Ctx {
 
     async fn network_quiet(&self, deadline: Instant) -> bool {
         let mut idle: Option<Instant> = None;
+        let mut peak_inflight = 0;
+        let mut max_observed_age_ms = 0u128;
+        let mut aged_out = 0;
         loop {
             let now = Instant::now();
-            let busy = lock(&self.net)
-                .inflight
-                .values()
-                .any(|t| now.duration_since(*t) < LONG_REQUEST);
+            let busy = {
+                let net = lock(&self.net);
+                peak_inflight = peak_inflight.max(net.inflight.len());
+                max_observed_age_ms = max_observed_age_ms.max(
+                    net.inflight
+                        .values()
+                        .map(|t| now.duration_since(*t).as_millis())
+                        .max()
+                        .unwrap_or(0),
+                );
+                aged_out = aged_out.max(
+                    net.inflight
+                        .values()
+                        .filter(|t| now.duration_since(**t) >= LONG_REQUEST)
+                        .count(),
+                );
+                net.inflight.values().any(|t| now.duration_since(*t) < LONG_REQUEST)
+            };
             if busy {
                 idle = None;
             } else if now.duration_since(*idle.get_or_insert(now)) >= NET_QUIET {
+                self.log("network_quiet",json!({"ready":true,"peak_inflight":peak_inflight,"max_observed_age_ms":max_observed_age_ms,"aged_out_inflight":aged_out}));
                 return true;
             }
             if now >= deadline {
+                self.log("network_quiet",json!({"ready":false,"peak_inflight":peak_inflight,"max_observed_age_ms":max_observed_age_ms,"aged_out_inflight":aged_out}));
                 return false;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

@@ -13,6 +13,7 @@ pub mod journal;
 pub mod js;
 pub mod mcp;
 pub mod ops;
+mod ready;
 pub mod refusal;
 pub mod replay;
 pub mod report;
