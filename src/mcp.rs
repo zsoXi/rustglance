@@ -62,8 +62,6 @@ impl From<Value> for Output {
 pub async fn run_op(ctx: &Ctx, journal: Option<&Journal>, op: &OpDef, mut args: Value) -> Result<Output, Refusal> {
     let t = now();
     let start = Instant::now();
-    // Writes blocked between calls belong to no call; they stay in the log.
-    ctx.take_blocked();
     let res = if ctx.human.load(Ordering::Acquire) {
         Err(Refusal::new(
             Class::HumanControl,
@@ -93,6 +91,7 @@ pub async fn run_op(ctx: &Ctx, journal: Option<&Journal>, op: &OpDef, mut args: 
         }),
         other => other,
     };
+    // Includes writes blocked since the last call: pages often save after a click has settled.
     let blocked = ctx.take_blocked();
     let ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     if matches!(&res, Err(r) if r.class == Class::Password) {
@@ -107,6 +106,7 @@ pub async fn run_op(ctx: &Ctx, journal: Option<&Journal>, op: &OpDef, mut args: 
                 out.data.insert("blocked_writes".to_string(), json!(blocked));
             }
             entry["result"] = Value::Object(out.data.clone());
+            hide_secrets(&mut entry["result"]);
             if let Some(text) = &out.text {
                 entry["text"] = json!(text);
             }
@@ -137,6 +137,38 @@ fn hide_typed(args: &mut Value) {
         if let Some(v) = args.get_mut(k) {
             *v = json!("<hidden>");
         }
+    }
+}
+
+/// Parts of a key name that mark a secret in a site's response.
+const SECRET_KEYS: [&str; 8] = [
+    "csrf",
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "cookie",
+    "api_key",
+    "apikey",
+];
+
+/// Blanks secrets in the journal's copy of a result. Numbers and booleans stay,
+/// so counters such as `input_tokens` are kept.
+fn hide_secrets(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            for (k, val) in m.iter_mut() {
+                let key = k.to_ascii_lowercase();
+                let carries_data = matches!(val, Value::String(_) | Value::Array(_) | Value::Object(_));
+                if carries_data && SECRET_KEYS.iter().any(|s| key.contains(s)) {
+                    *val = json!("<hidden>");
+                } else {
+                    hide_secrets(val);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(hide_secrets),
+        _ => {}
     }
 }
 

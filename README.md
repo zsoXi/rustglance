@@ -165,7 +165,9 @@ against a hostile page or a hostile local user.
 - The journal, screenshots and downloads are written with your default file
   permissions (umask), and the journal holds every argument, including text
   the agent typed. `type` refuses password fields and keeps that attempt's
-  text out of the journal. Keep the evidence folder private.
+  text out of the journal. Results are stored with values under names such
+  as `token`, `csrf` or `cookie` blanked, but other secrets in a page or a
+  response are not detected. Keep the evidence folder private.
 
 ## Extending
 
